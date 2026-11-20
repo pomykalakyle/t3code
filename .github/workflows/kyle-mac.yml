@@ -1,0 +1,122 @@
+name: Kyle Mac build
+
+# Fork-only. Builds the patched "T3 Code (Nightly)" app for Apple Silicon on a
+# GitHub-hosted runner, ad-hoc signed, with no update feed, and publishes it as
+# a prerelease on this fork. Upstream's workflows stay disabled here.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kyle-mac
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      # Same checkout as upstream's release workflows: the vendored .repos tree
+      # has orphaned gitlinks that actions/checkout's cleanup trips over.
+      - name: Checkout
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --filter=blob:none origin "$GITHUB_SHA"
+          git fetch --no-tags --filter=blob:none https://github.com/pingdotgg/t3code.git \
+            'refs/tags/v*-nightly.*:refs/tags/v*-nightly.*'
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach "$GITHUB_SHA"
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(git describe --tags --abbrev=0 --match 'v*-nightly.*' HEAD)"
+          sha="$(git rev-parse --short=7 HEAD)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Building ${tag#v} + kyle.$sha"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install
+
+      # The app keeps the stock nightly version so it is still "T3 Code (Nightly)"
+      # (name, bundle id, branding), replacing the installed app in place.
+      - name: Set version and public configuration
+        run: |
+          node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+          cp .env.example .env
+
+      # Without GITHUB_REPOSITORY the build has no publish config, so the app
+      # ships no update feed and never replaces itself with a stock nightly.
+      - name: Build desktop artifact
+        shell: bash
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          set -euo pipefail
+          env -u GITHUB_REPOSITORY -u T3CODE_DESKTOP_UPDATE_REPOSITORY \
+            vp run dist:desktop:artifact \
+            --platform mac --target dmg --arch arm64 \
+            --build-version "${{ steps.version.outputs.version }}" --verbose
+          ls -la release
+
+      - name: Ad-hoc sign and package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/kyle-app"
+          out="$RUNNER_TEMP/kyle-out"
+          mkdir -p "$work" "$out"
+          ditto -x -k "$(ls release/*.zip | head -1)" "$work"
+          app="$(ls -d "$work"/*.app | head -1)"
+          test -f "$app/Contents/Resources/app-update.yml" && { echo "app-update.yml present: update feed not disabled" >&2; exit 1; }
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" -c "Print :CFBundleName" -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist"
+          base="T3-Code-Nightly-${{ steps.version.outputs.version }}-kyle.${{ steps.version.outputs.sha }}-arm64"
+          ditto -c -k --keepParent "$app" "$out/$base.zip"
+          hdiutil create -volname "T3 Code (Nightly) kyle" -srcfolder "$app" -ov -format UDZO "$out/$base.dmg"
+          shasum -a 256 "$out"/* | tee "$out/SHA256SUMS.txt"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Launch check
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="${{ steps.package.outputs.app }}"
+          executable=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist")
+          node scripts/smoke-desktop-app.ts --artifacts-dir "$RUNNER_TEMP/launch-check" --executable "$app/Contents/MacOS/$executable"
+
+      - name: Publish prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="kyle-${{ steps.version.outputs.tag }}-${{ steps.version.outputs.sha }}"
+          gh release create "$tag" "${{ steps.package.outputs.out }}"/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "T3 Code (Nightly) ${{ steps.version.outputs.version }} + kyle.${{ steps.version.outputs.sha }}" \
+            --notes "Kyle's patched build of ${{ steps.version.outputs.tag }} at ${GITHUB_SHA}. Apple Silicon, ad-hoc signed, no auto-update."
