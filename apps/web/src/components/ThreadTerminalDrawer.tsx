@@ -1,5 +1,5 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { workspaceAreaProps } from "../lib/workspaceFocus";
+import { requestWorkspaceFocus, workspaceAreaProps } from "../lib/workspaceFocus";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
@@ -69,6 +69,7 @@ import {
   isTerminalSplitVerticalShortcut,
   isTerminalToggleShortcut,
   isThreadNavigationShortcut,
+  resolveShortcutCommand,
   terminalDeleteShortcutData,
   terminalNavigationShortcutData,
 } from "../keybindings";
@@ -95,6 +96,12 @@ import { terminalInputWriter } from "./terminal/terminalInputWriter";
 import { useAtomCommand } from "../state/use-atom-command";
 import { preventTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
 import { observeResize } from "../lib/observeResize";
+import { createFocusChatScanner, NVIM_PANE_KEYS } from "../lib/paneNavigation";
+import {
+  isNvimTerminal,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "../rightPanelStore";
 import { threadShortcutContext } from "./Sidebar.logic";
 import {
   consumePendingTerminalFocus,
@@ -181,6 +188,7 @@ export function synchronizeTerminalOutput(
   >,
   session: Pick<TerminalSessionState, "output" | "version">,
   cursor: TerminalOutputCursor,
+  onUpdate?: (update: TerminalOutputUpdate) => void,
 ): TerminalOutputCursor {
   if (session.version === 0) return cursor;
   const update = readTerminalOutputUpdate(session.output, cursor);
@@ -189,6 +197,7 @@ export function synchronizeTerminalOutput(
   const compared = cells <= MAX_COMPARED_SELECTION_CELLS;
   const selection = cells > 0 && compared ? terminal.getSelection() : "";
   writeTerminalOutputUpdate(terminal, update);
+  onUpdate?.(update);
   if (!compared || (cells > 0 && terminal.getSelection() !== selection)) {
     terminal.clearSelection({ source: "output" });
   }
@@ -201,11 +210,12 @@ export function synchronizeTerminalSession(
   previous: Pick<TerminalSessionState, "output" | "version" | "error">,
   session: Pick<TerminalSessionState, "output" | "version" | "error">,
   cursor: TerminalOutputCursor,
+  onUpdate?: (update: TerminalOutputUpdate) => void,
 ): TerminalOutputCursor {
   const nextCursor =
     session.version === previous.version && session.output === previous.output
       ? cursor
-      : synchronizeTerminalOutput(terminal, session, cursor);
+      : synchronizeTerminalOutput(terminal, session, cursor, onUpdate);
   // An attach failure can change only the error, keeping the last buffer.
   if (
     session.error !== null &&
@@ -592,6 +602,11 @@ function TerminalSessionViewport({
   const selectionActionRequestIdRef = useRef(0);
   const readKeybindings = useEffectEvent(() => keybindings);
   const readThreadShortcutContext = useEffectEvent(() => threadShortcutContext(threadRef));
+  const isPanelNvim = useEffectEvent(() =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces.some(
+      (surface) => isNvimTerminal(surface, terminalId),
+    ),
+  );
   const handleSessionExited = useEffectEvent(() => {
     if (hasTerminalWriteAccess()) onSessionExited();
   });
@@ -777,6 +792,7 @@ function TerminalSessionViewport({
       synchronizeTerminalStatus(terminal, latestSession.status, latestSession.version);
       // Read and subscribe in one synchronous step so no output lands between them.
       let previousSession = latestSession;
+      const scanFocusChat = createFocusChatScanner();
       let resizeGeneration = writableSessionGeneration(latestSession, hasTerminalWriteAccess());
       setupCleanups.push(
         subscribeTerminalSession((session) => {
@@ -796,6 +812,11 @@ function TerminalSessionViewport({
             previous,
             session,
             outputCursorRef.current,
+            (update) => {
+              if (scanFocusChat(update) && mount.contains(document.activeElement)) {
+                requestWorkspaceFocus({ area: "composer" });
+              }
+            },
           );
         }),
       );
@@ -1037,6 +1058,15 @@ function TerminalSessionViewport({
             context: { ...readThreadShortcutContext(), terminalFocus: true },
           })
         ) {
+          return false;
+        }
+
+        const paneCommand = resolveShortcutCommand(event, currentKeybindings, options);
+        if ((paneCommand === "pane.left" || paneCommand === "pane.right") && isPanelNvim()) {
+          event.preventDefault();
+          event.stopPropagation();
+          const keys = new KeyboardEvent("keydown", NVIM_PANE_KEYS[paneCommand]);
+          void sendTerminalInput(terminal.encodeKey(keys), m(msg("Terminal write failed")));
           return false;
         }
 

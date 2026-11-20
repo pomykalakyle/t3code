@@ -27,8 +27,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { MAX_TERMINALS_PER_GROUP } from "../../types";
 import {
+  isNvimTerminal,
   selectThreadRightPanelState,
   type RightPanelSurface,
+  type TerminalSurfaceProgram,
   useRightPanelStore,
 } from "../../rightPanelStore";
 import { openUrlInPreview } from "../../browser/openFileInPreview";
@@ -45,6 +47,13 @@ import {
   focusTerminal,
 } from "../../lib/terminalFocus";
 import { useTerminalUiStateStore } from "../../terminalUiStateStore";
+import { requestWorkspaceFocus } from "../../lib/workspaceFocus";
+import {
+  NVIM_SURFACE_COMMAND,
+  paneCommandAction,
+  type PaneCommand,
+} from "../../lib/paneNavigation";
+import type { TerminalFocusOwner } from "../../lib/terminalFocus";
 import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -336,17 +345,61 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     );
   };
   const runShellCommandStable = useStableCallback(runShellCommand);
-  const addTerminalSurface = () => {
+  const addTerminalSurface = (program?: TerminalSurfaceProgram) => {
     if (!activeThreadRef) return;
     const launched = terminalActions.launchTerminal({
       place: (terminalId) =>
-        useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId),
+        useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId, program),
     });
     if (!launched) return;
     focusTerminal(activeThreadRef, launched.terminalId);
-    void launched.result;
+    void launched.result.then((result) => {
+      if (program === "nvim" && result._tag === "Success") {
+        void terminalActions.writeToTerminal(launched.terminalId, NVIM_SURFACE_COMMAND);
+      }
+    });
   };
-  const addTerminalSurfaceStable = useStableCallback(addTerminalSurface);
+  // Menu items pass their click event, which must not become a program.
+  const addTerminalSurfaceStable = useStableCallback(() => addTerminalSurface());
+  const addNeovimSurfaceStable = useStableCallback(() => addTerminalSurface("nvim"));
+  /** Activates the panel's Neovim surface, or else the panel's active terminal. */
+  const focusPanelNvim = (): boolean => {
+    if (!activeThreadRef) return false;
+    const store = useRightPanelStore.getState();
+    const panel = selectThreadRightPanelState(store.byThreadKey, activeThreadRef);
+    const nvim = panel.surfaces.find(
+      (surface) =>
+        surface.kind === "terminal" &&
+        surface.terminalIds.includes(surface.resourceId) &&
+        isNvimTerminal(surface, surface.resourceId),
+    );
+    if (nvim?.kind === "terminal") {
+      store.activateSurface(activeThreadRef, nvim.id);
+      store.activateTerminal(activeThreadRef, nvim.id, nvim.resourceId);
+      focusTerminal(activeThreadRef, nvim.resourceId);
+      return true;
+    }
+    const active = panel.surfaces.find((surface) => surface.id === panel.activeSurfaceId);
+    if (!panel.isOpen || active?.kind !== "terminal") return false;
+    focusActivePanelTerminal(activeThreadRef);
+    return true;
+  };
+  const runPaneCommand = (command: PaneCommand, terminalFocusOwner: TerminalFocusOwner | null) => {
+    const nvimFocused =
+      terminalFocusOwner === "right-panel" &&
+      activeRightPanelSurface?.kind === "terminal" &&
+      isNvimTerminal(activeRightPanelSurface, activeRightPanelSurface.activeTerminalId);
+    switch (paneCommandAction(command, { terminalFocusOwner, nvimFocused })) {
+      // The focused terminal's viewport sends Neovim the key, encoded the way it asked for.
+      case "terminal":
+        return false;
+      case "composer":
+        requestWorkspaceFocus({ area: "composer" });
+        return;
+      case "nvim":
+        return focusPanelNvim() ? undefined : false;
+    }
+  };
   const splitPanelTerminal = (direction: "horizontal" | "vertical" = "horizontal") => {
     if (
       !activeThreadRef ||
@@ -417,6 +470,8 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   };
   // A focused right-panel terminal takes the split/new/close chords; otherwise they act on the drawer.
   const shortcuts = {
+    "pane.left": ({ terminalFocusOwner }) => runPaneCommand("pane.left", terminalFocusOwner),
+    "pane.right": ({ terminalFocusOwner }) => runPaneCommand("pane.right", terminalFocusOwner),
     "terminal.toggle": () => {
       if (
         !terminalUiState.terminalOpen &&
@@ -456,6 +511,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   return {
     shortcuts,
     activatePanelTerminalStable,
+    addNeovimSurfaceStable,
     addTerminalContextToDraftStable,
     addTerminalSurfaceStable,
     closePanelTerminalStable,

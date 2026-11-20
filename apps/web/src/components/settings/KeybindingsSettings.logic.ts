@@ -407,6 +407,9 @@ export function buildKeybindingCommandOptions(
 const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "workspace.focusNext": msg("Focus Next Workspace Area"),
   "workspace.focusPrevious": msg("Focus Previous Workspace Area"),
+  // Fork-only commands stay out of the translation catalogs, which every upstream release rewrites.
+  "pane.left": "Pane: Left (Neovim window, then chat)",
+  "pane.right": "Pane: Right (chat to Neovim, then its next window)",
   "composer.sendAlternate": msg("Composer: Opposite Queue or Steer Action"),
   "composer.sendBackground": msg("Composer: Start in Background"),
   "composer.sendAndNewThread": msg("Composer: Send and Start New Thread"),

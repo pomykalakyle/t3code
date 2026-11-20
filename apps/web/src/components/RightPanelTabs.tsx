@@ -49,6 +49,7 @@ import {
   Globe2,
   MessagesSquare,
   Plus,
+  SquareCode,
   TerminalSquare,
   Volume2Icon,
   VolumeOffIcon,
@@ -66,7 +67,7 @@ import {
 
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import { isNvimTerminal, type RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { issueStatePresentation } from "~/components/issue/issuePresentation";
 import { issueEnvironment } from "~/state/issues";
@@ -144,6 +145,8 @@ export interface RightPanelTabsProps {
   /** Keep separate from the DOM click handler so a MouseEvent cannot become a profile id. */
   onAddBrowserInProfile: (profileId: string) => void;
   onAddTerminal: () => void;
+  /** Absent where Neovim surfaces are not offered. */
+  onAddNeovim?: (() => void) | undefined;
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
@@ -178,6 +181,9 @@ export type PullRequestTabStatusSeed = Pick<PullRequestTabStatus, "state" | "isD
 function shouldOpenDefaultBrowserProfileFromMenuClick(pointerType: string | undefined): boolean {
   return pointerType !== "touch";
 }
+
+// Fork-only copy stays out of the translation catalogs, which every upstream release rewrites.
+const NEOVIM_LABEL = "Neovim";
 
 const SURFACE_DISABLED_REASONS = {
   browser: msg("Browser previews are only available in the T3 Code desktop app."),
@@ -328,6 +334,8 @@ function RightPanelEmptyState(props: {
   onAddBrowserInProfile: (profileId: string) => void;
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
+  /** Absent where Neovim surfaces are not offered. */
+  onAddNeovim?: (() => void) | undefined;
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
@@ -366,6 +374,18 @@ function RightPanelEmptyState(props: {
       disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.terminal),
       onClick: props.onAddTerminal,
     },
+    ...(props.onAddNeovim
+      ? [
+          {
+            label: NEOVIM_LABEL,
+            icon: SquareCode,
+            shortcut: "N",
+            available: props.terminalAvailable,
+            disabledReason: messages(SURFACE_UNAVAILABLE_HINTS.terminal),
+            onClick: props.onAddNeovim,
+          },
+        ]
+      : []),
     {
       label: msg("Files"),
       icon: Files,
@@ -599,6 +619,7 @@ function surfaceTitle(
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
       );
     case "terminal":
+      if (isNvimTerminal(surface, surface.activeTerminalId)) return NEOVIM_LABEL;
       return (
         terminalLabelsById.get(surface.activeTerminalId) ??
         getTerminalLabel(surface.activeTerminalId, resolve)
@@ -691,6 +712,9 @@ function SurfaceIcon({
         />
       );
     case "terminal":
+      if (isNvimTerminal(surface, surface.activeTerminalId)) {
+        return <SquareCode className="size-3 shrink-0" />;
+      }
       return <TerminalSquare className="size-3 shrink-0" />;
     case "pull-request":
       return (
@@ -1185,6 +1209,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: messages(SURFACE_DISABLED_REASONS.terminal),
       onClick: props.onAddTerminal,
     },
+    ...(props.onAddNeovim
+      ? [
+          {
+            label: NEOVIM_LABEL,
+            icon: SquareCode,
+            shortcut: "N",
+            available: props.terminalAvailable,
+            disabledReason: messages(SURFACE_DISABLED_REASONS.terminal),
+            onClick: props.onAddNeovim,
+          },
+        ]
+      : []),
     {
       label: msg("Files"),
       icon: Files,
@@ -1637,6 +1673,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowserInProfile={props.onAddBrowserInProfile}
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
+            onAddNeovim={props.onAddNeovim}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}

@@ -1948,6 +1948,7 @@ export default function ChatView(props: ChatViewProps) {
 
   const {
     activatePanelTerminalStable,
+    addNeovimSurfaceStable,
     addTerminalContextToDraftStable,
     addTerminalSurfaceStable,
     closePanelTerminalStable,
@@ -4103,6 +4104,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowser={() => createBrowserSurface()}
           onAddBrowserInProfile={createBrowserSurfaceStable}
           onAddTerminal={addTerminalSurfaceStable}
+          onAddNeovim={addNeovimSurfaceStable}
           onAddDiff={addDiffSurfaceStable}
           onAddFiles={addFilesSurfaceStable}
           onAddPullRequest={addPullRequestSurfaceStable}

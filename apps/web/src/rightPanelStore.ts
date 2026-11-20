@@ -28,6 +28,8 @@ const RIGHT_PANEL_KINDS = [
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
+export type TerminalSurfaceProgram = "nvim";
+
 export type PullRequestDetailTab = "summary" | "guide" | "timeline" | "code";
 
 export interface DeviceTabTarget {
@@ -48,6 +50,8 @@ export type RightPanelSurface =
       terminalIds: string[];
       activeTerminalId: string;
       splitDirection?: "horizontal" | "vertical";
+      /** The program the surface's first terminal (`resourceId`) was opened to run. */
+      program?: TerminalSurfaceProgram;
     }
   | { id: "diff"; kind: "diff" }
   | {
@@ -192,7 +196,11 @@ interface RightPanelStoreState {
   ) => void;
   /** Clears the surface's pending link only while it is still `revealUrl`. */
   settlePullRequestReveal: (ref: ScopedThreadRef, surfaceId: string, revealUrl: string) => void;
-  openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
+  openTerminal: (
+    ref: ScopedThreadRef,
+    terminalId: string,
+    program?: TerminalSurfaceProgram,
+  ) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -287,13 +295,24 @@ const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface =>
   attachment,
 });
 
-const terminalSurface = (terminalId: string): RightPanelSurface => ({
+const terminalSurface = (
+  terminalId: string,
+  program?: TerminalSurfaceProgram,
+): RightPanelSurface => ({
   id: `terminal:${terminalId}`,
   kind: "terminal",
   resourceId: terminalId,
   terminalIds: [terminalId],
   activeTerminalId: terminalId,
+  ...(program ? { program } : {}),
 });
+
+/** Whether `terminalId` is the terminal a Neovim surface was opened to run. */
+export function isNvimTerminal(surface: RightPanelSurface | null | undefined, terminalId: string) {
+  return (
+    surface?.kind === "terminal" && surface.program === "nvim" && surface.resourceId === terminalId
+  );
+}
 
 export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-request" }>;
 
@@ -986,10 +1005,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             );
           }),
         ),
-      openTerminal: (ref, terminalId) =>
+      openTerminal: (ref, terminalId, program) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) =>
-            upsertSurface(current, terminalSurface(terminalId)),
+            upsertSurface(current, terminalSurface(terminalId, program)),
           ),
         ),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>

@@ -1059,6 +1059,11 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
+  /** Encodes a key press in the keyboard protocol the running program asked for. */
+  encodeKey(event: KeyboardEvent): string {
+    return this.core.encodeKey(event);
+  }
+
   scrollToBottom(): void {
     this.core.scrollToBottom();
     this.forceFullRender = true;
