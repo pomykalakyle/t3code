@@ -1,0 +1,16 @@
+# Fork only: every commit on `kyle` goes straight to the fork, so neither the Mac
+# nor Beefy sits on unpushed work. The other machine pulls it through T3's
+# project auto-pull (or scripts/kyle-update.sh, which pulls first).
+[ "$(git symbolic-ref --short -q HEAD || true)" = kyle ] || exit 0
+export GIT_TERMINAL_PROMPT=0
+
+git push -q origin kyle 2>/dev/null && exit 0
+
+# Rejected: the other machine pushed first. Replay this commit on top and retry.
+if git pull -q --rebase --autostash origin kyle && git push -q origin kyle; then
+  echo "kyle: rebased onto origin/kyle and pushed"
+  exit 0
+fi
+git rebase --abort 2>/dev/null || true
+echo "kyle: could not push to origin/kyle; pull, fix and push by hand" >&2
+exit 0
